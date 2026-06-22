@@ -40,6 +40,7 @@ export default function Studio() {
 
   // Budget / produce
   const [choice, setChoice] = useState<ModelChoice>({
+    style: "designed",
     videoModel: "fal-ai/kling-video/v3/standard/text-to-video",
     imageModel: "fal-ai/flux/dev",
     voiceId: VOICE_PRESETS[0].id,
@@ -142,7 +143,7 @@ export default function Studio() {
     try {
       // 1. Reference still for continuity (non-fatal if it fails)
       let refUrl: string | undefined;
-      if (board.characterRef && supportsRef) {
+      if (board.characterRef && supportsRef && choice.style === "ai_video") {
         const payload = { model: choice.imageModel, prompt: board.characterRef.description, aspectRatio: board.aspectRatio };
         addDebug("ref", "req", `image · ${choice.imageModel}`, JSON.stringify(payload, null, 2));
         pushLog("generating character still…");
@@ -156,31 +157,35 @@ export default function Studio() {
         }
       }
 
-      // 2. Video per ai_video scene
-      for (const s of board.scenes) {
-        if (s.visualType !== "ai_video") continue;
-        updateScene(s.id, { status: "running" });
-        const videoPrompt =
-          s.videoPrompt?.trim() ||
-          `Cinematic, evocative shot illustrating: ${s.voiceover || s.onScreenText || board.title}. ${s.durationSec} seconds.`;
-        const payload = {
-          model: choice.videoModel, prompt: videoPrompt, durationSec: s.durationSec,
-          aspectRatio: board.aspectRatio, index: s.index,
-          imageUrl: s.usesCharacterRef ? refUrl : undefined,
-        };
-        addDebug(`scene ${s.index + 1}`, "req", `video · ${choice.videoModel}`, JSON.stringify(payload, null, 2));
-        pushLog(`scene ${s.index + 1}: video…`);
-        try {
-          const r = await api<{ url: string; mock?: boolean }>("/api/generate/video", payload);
-          sceneMedia.current[s.id] = { url: r.url, mock: r.mock };
-          updateScene(s.id, { status: "done", videoUrl: r.url || `mock:${s.index}` });
-          addDebug(`scene ${s.index + 1}`, r.mock ? "err" : "ok", r.mock ? "returned MOCK (no fal key?)" : `video url: ${r.url}`);
-          pushLog(`scene ${s.index + 1}: ${r.mock ? "mock" : "done"}`);
-        } catch (e: any) {
-          updateScene(s.id, { status: "error", error: e.message });
-          addDebug(`scene ${s.index + 1}`, "err", "video failed", e.message);
-          pushLog(`scene ${s.index + 1} failed: ${e.message}`);
+      // 2. Video per ai_video scene — only when AI-video style is selected.
+      if (choice.style === "ai_video") {
+        for (const s of board.scenes) {
+          if (s.visualType !== "ai_video") continue;
+          updateScene(s.id, { status: "running" });
+          const videoPrompt =
+            s.videoPrompt?.trim() ||
+            `Cinematic, evocative shot illustrating: ${s.voiceover || s.onScreenText || board.title}. ${s.durationSec} seconds.`;
+          const payload = {
+            model: choice.videoModel, prompt: videoPrompt, durationSec: s.durationSec,
+            aspectRatio: board.aspectRatio, index: s.index,
+            imageUrl: s.usesCharacterRef ? refUrl : undefined,
+          };
+          addDebug(`scene ${s.index + 1}`, "req", `video · ${choice.videoModel}`, JSON.stringify(payload, null, 2));
+          pushLog(`scene ${s.index + 1}: video…`);
+          try {
+            const r = await api<{ url: string; mock?: boolean }>("/api/generate/video", payload);
+            sceneMedia.current[s.id] = { url: r.url, mock: r.mock };
+            updateScene(s.id, { status: "done", videoUrl: r.url || `mock:${s.index}` });
+            addDebug(`scene ${s.index + 1}`, r.mock ? "err" : "ok", r.mock ? "returned MOCK (no fal key?)" : `video url: ${r.url}`);
+            pushLog(`scene ${s.index + 1}: ${r.mock ? "mock" : "done"}`);
+          } catch (e: any) {
+            updateScene(s.id, { status: "error", error: e.message });
+            addDebug(`scene ${s.index + 1}`, "err", "video failed", e.message);
+            pushLog(`scene ${s.index + 1} failed: ${e.message}`);
+          }
         }
+      } else {
+        addDebug("visuals", "ok", "designed motion — rendered at assembly, no video API cost");
       }
 
       // 3. Voiceover per scene that has a line (non-fatal per line)
@@ -225,7 +230,7 @@ export default function Studio() {
     pushLog("loading ffmpeg…");
     try {
       const url = await assemble({
-        board, sceneMedia: sceneMedia.current, voUrls: voUrls.current,
+        board, style: choice.style, sceneMedia: sceneMedia.current, voUrls: voUrls.current,
         musicUrl: musicUrl.current, onProgress: pushLog,
       });
       setFinalUrl(url);
@@ -517,6 +522,31 @@ export default function Studio() {
         <div className="grid gap-5 md:grid-cols-[1fr_340px]">
           <div className="space-y-4">
             <div className="panel p-4">
+              <p className="label mb-3">Visual style</p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button
+                  onClick={() => setChoice({ ...choice, style: "designed" })}
+                  className={`rounded-lg border p-3 text-left transition ${
+                    choice.style === "designed" ? "border-marker bg-marker/10" : "border-line hover:border-muted"
+                  }`}
+                >
+                  <span className="font-medium text-bone">Designed motion</span>
+                  <p className="mt-0.5 text-xs text-muted">Art-directed kinetic typography. Coherent, premium, free to render. Recommended.</p>
+                </button>
+                <button
+                  onClick={() => setChoice({ ...choice, style: "ai_video" })}
+                  className={`rounded-lg border p-3 text-left transition ${
+                    choice.style === "ai_video" ? "border-marker bg-marker/10" : "border-line hover:border-muted"
+                  }`}
+                >
+                  <span className="font-medium text-bone">AI video</span>
+                  <p className="mt-0.5 text-xs text-muted">Generated footage per scene. Higher ceiling, less consistent, costs per second.</p>
+                </button>
+              </div>
+            </div>
+
+            {choice.style === "ai_video" && (
+            <div className="panel p-4">
               <p className="label mb-3">Video model</p>
               <div className="grid gap-2">
                 {(Object.keys(VIDEO_MODELS) as VideoModelId[]).map((id) => (
@@ -536,6 +566,7 @@ export default function Studio() {
                 ))}
               </div>
             </div>
+            )}
             <div className="panel grid gap-4 p-4 sm:grid-cols-2">
               <div>
                 <p className="label mb-2">Voice</p>

@@ -1,7 +1,8 @@
 "use client";
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile, toBlobURL } from "@ffmpeg/util";
-import type { Scene, Storyboard } from "./types";
+import type { Storyboard } from "./types";
+import { FPS, sceneFrameCount, drawSceneFrame, ensureFonts } from "./motion";
 
 let ff: FFmpeg | null = null;
 
@@ -19,136 +20,84 @@ async function getFFmpeg(onLog?: (s: string) => void) {
 
 export interface AssembleInput {
   board: Storyboard;
-  // resolved media per scene: a playable video/image URL (or null for cards we render to color)
+  style: "designed" | "ai_video";
   sceneMedia: Record<string, { url: string; mock?: boolean } | undefined>;
-  voUrls: Record<string, string | undefined>; // sceneId -> VO data url
+  voUrls: Record<string, string | undefined>;
   musicUrl?: string;
   onProgress?: (msg: string) => void;
 }
 
-const SIZE: Record<string, string> = {
-  "16:9": "1280x720",
-  "9:16": "720x1280",
-  "1:1": "1024x1024",
+const SIZE: Record<string, [number, number]> = {
+  "16:9": [1280, 720],
+  "9:16": [720, 1280],
+  "1:1": [1024, 1024],
 };
 
-// Build a still card as a PNG via canvas, returned as a Uint8Array.
-async function renderCard(scene: Scene, w: number, h: number): Promise<Uint8Array> {
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#15120e";
-  ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = "#E9E2D3";
-  ctx.textAlign = "center";
-  const head = scene.card?.headline || scene.onScreenText || "";
-  ctx.font = `700 ${Math.round(w / 12)}px sans-serif`;
-  ctx.fillText(head, w / 2, h / 2 - 10);
-  if (scene.card?.sub) {
-    ctx.fillStyle = "#FF5631";
-    ctx.font = `500 ${Math.round(w / 28)}px sans-serif`;
-    ctx.fillText(scene.card.sub, w / 2, h / 2 + Math.round(w / 16));
-  }
-  const blob: Blob = await new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
-  return new Uint8Array(await blob.arrayBuffer());
+function canvasToPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  return new Promise((res) =>
+    canvas.toBlob(async (b) => res(new Uint8Array(await b!.arrayBuffer())), "image/png")
+  );
 }
 
-// Mock scene: a colored slate so the export is visible without real video.
-async function renderSlate(scene: Scene, w: number, h: number): Promise<Uint8Array> {
-  const c = document.createElement("canvas");
-  c.width = w;
-  c.height = h;
-  const ctx = c.getContext("2d")!;
-  const hue = (scene.index * 47) % 360;
-  ctx.fillStyle = `hsl(${hue} 30% 18%)`;
-  ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = "#9A8F7E";
-  ctx.font = `600 ${Math.round(w / 36)}px monospace`;
-  ctx.textAlign = "center";
-  ctx.fillText(`SCENE ${scene.index + 1} · ${scene.visualType}`, w / 2, 50);
-  ctx.fillStyle = "#E9E2D3";
-  wrap(ctx, scene.videoPrompt || scene.voiceover || "(mock)", w / 2, h / 2, w * 0.8, 28);
-  const blob: Blob = await new Promise((res) => c.toBlob((b) => res(b!), "image/png"));
-  return new Uint8Array(await blob.arrayBuffer());
-}
-
-function wrap(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, max: number, lh: number) {
-  ctx.font = "400 22px sans-serif";
-  const words = text.split(" ");
-  let line = "";
-  let yy = y;
-  for (const word of words) {
-    const test = line + word + " ";
-    if (ctx.measureText(test).width > max && line) {
-      ctx.fillText(line, x, yy);
-      line = word + " ";
-      yy += lh;
-    } else line = test;
-  }
-  ctx.fillText(line, x, yy);
-}
-
-/**
- * Assemble the ad. Each scene becomes a normalized clip of its own duration,
- * clips are concatenated, then the full VO and music beds are mixed over the top.
- * Returns an MP4 blob URL.
- */
 export async function assemble(input: AssembleInput): Promise<string> {
-  const { board, sceneMedia, voUrls, musicUrl, onProgress } = input;
+  const { board, style, sceneMedia, voUrls, musicUrl, onProgress } = input;
   const log = onProgress ?? (() => {});
+  await ensureFonts();
   const ffmpeg = await getFFmpeg(log);
-  const [w, h] = (SIZE[board.aspectRatio] || SIZE["16:9"]).split("x").map(Number);
+  const [w, h] = SIZE[board.aspectRatio] || SIZE["16:9"];
+
+  const canvas = document.createElement("canvas");
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext("2d")!;
 
   const segFiles: string[] = [];
 
-  for (const scene of board.scenes) {
+  for (let i = 0; i < board.scenes.length; i++) {
+    const scene = board.scenes[i];
     const dur = Math.max(2, Math.min(8, scene.durationSec));
+    const seg = `seg${i}.mp4`;
     const media = sceneMedia[scene.id];
-    const out = `seg${scene.index}.mp4`;
+    const useClip = style === "ai_video" && scene.visualType === "ai_video" && media?.url && !media.mock;
 
-    if (media?.url && !media.mock) {
-      // Real video clip: normalize size/fps/codec and trim to scene duration.
-      await ffmpeg.writeFile(`in${scene.index}`, await fetchFile(media.url));
+    if (useClip) {
+      log(`scene ${i + 1}: clip`);
+      await ffmpeg.writeFile(`clip${i}`, await fetchFile(media!.url));
       await ffmpeg.exec([
-        "-i", `in${scene.index}`,
-        "-t", String(dur),
-        "-vf", `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30`,
-        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", out,
+        "-i", `clip${i}`, "-t", String(dur),
+        "-vf", `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${FPS}`,
+        "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), seg,
       ]);
     } else {
-      // Card / mock / screen-rec placeholder: render a PNG and hold it for the duration.
-      const png =
-        scene.visualType === "designed_card"
-          ? await renderCard(scene, w, h)
-          : await renderSlate(scene, w, h);
-      await ffmpeg.writeFile(`card${scene.index}.png`, png);
+      log(`scene ${i + 1}: rendering motion`);
+      const frames = sceneFrameCount(scene);
+      for (let f = 0; f < frames; f++) {
+        drawSceneFrame(ctx, scene, f, frames, w, h, { index: i, count: board.scenes.length, isLast: i === board.scenes.length - 1 });
+        await ffmpeg.writeFile(`f${i}_${String(f).padStart(4, "0")}.png`, await canvasToPng(canvas));
+      }
       await ffmpeg.exec([
-        "-loop", "1", "-i", `card${scene.index}.png`,
-        "-t", String(dur),
-        "-vf", `scale=${w}:${h},setsar=1,fps=30`,
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", out,
+        "-framerate", String(FPS), "-i", `f${i}_%04d.png`,
+        "-t", String(dur), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), seg,
       ]);
+      for (let f = 0; f < frames; f++) {
+        try { await ffmpeg.deleteFile(`f${i}_${String(f).padStart(4, "0")}.png`); } catch {}
+      }
     }
-    segFiles.push(out);
-    log(`scene ${scene.index + 1} ready`);
+    segFiles.push(seg);
   }
 
-  // Concat the video segments.
   await ffmpeg.writeFile("concat.txt", segFiles.map((f) => `file '${f}'`).join("\n"));
   await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "concat.txt", "-c", "copy", "video.mp4"]);
-  log("video stitched");
+  log("stitched");
 
-  // Build one continuous VO track by concatenating per-scene VO at scene offsets.
-  // Simpler robust approach: concat VO clips in order (gaps where silent).
   const voList: string[] = [];
-  for (const scene of board.scenes) {
+  for (let i = 0; i < board.scenes.length; i++) {
+    const scene = board.scenes[i];
     const url = voUrls[scene.id];
-    const name = `vo${scene.index}.mp3`;
+    const name = `vo${i}.mp3`;
     if (url && !url.startsWith("data:audio/wav")) {
       await ffmpeg.writeFile(name, await fetchFile(url));
     } else {
-      // silence sized to the scene
       await ffmpeg.exec([
         "-f", "lavfi", "-t", String(scene.durationSec),
         "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
@@ -160,13 +109,11 @@ export async function assemble(input: AssembleInput): Promise<string> {
   await ffmpeg.writeFile("vo.txt", voList.map((f) => `file '${f}'`).join("\n"));
   await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "vo.txt", "-c", "copy", "vo.mp3"]);
 
-  // Mix VO + music (music ducked under VO) and mux onto the video.
   if (musicUrl && !musicUrl.startsWith("data:audio/wav")) {
     await ffmpeg.writeFile("music.mp3", await fetchFile(musicUrl));
     await ffmpeg.exec([
       "-i", "video.mp4", "-i", "vo.mp3", "-i", "music.mp3",
-      "-filter_complex",
-      "[2:a]volume=0.35[m];[1:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
+      "-filter_complex", "[2:a]volume=0.28[m];[1:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
       "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", "final.mp4",
     ]);
   } else {
@@ -175,9 +122,8 @@ export async function assemble(input: AssembleInput): Promise<string> {
       "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", "final.mp4",
     ]);
   }
-  log("audio mixed");
+  log("mixed");
 
   const data = (await ffmpeg.readFile("final.mp4")) as Uint8Array;
-  const blob = new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" });
-  return URL.createObjectURL(blob);
+  return URL.createObjectURL(new Blob([data.buffer as ArrayBuffer], { type: "video/mp4" }));
 }

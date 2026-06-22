@@ -42,6 +42,7 @@ export interface Storyboard {
 }
 
 export interface ModelChoice {
+  style: "designed" | "ai_video";
   videoModel: VideoModelId;
   imageModel: ImageModelId;
   voiceId: string;

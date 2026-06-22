@@ -53,21 +53,24 @@ export function estimateCost(board: Storyboard, choice: ModelChoice): CostEstima
   const aiScenes = board.scenes.filter((s) => s.visualType === "ai_video");
   const videoSeconds = aiScenes.reduce((n, s) => n + clampDuration(s.durationSec), 0);
   const vModel = VIDEO_MODELS[choice.videoModel];
-  const videoUsd = videoSeconds * vModel.usdPerSec;
-  lines.push({
-    label: "AI video",
-    detail: `${aiScenes.length} scenes · ${videoSeconds}s · ${vModel.label} @ $${vModel.usdPerSec}/s`,
-    usd: videoUsd,
-  });
 
-  // Reference still (only when the chosen model can use it and a character exists)
-  if (board.characterRef && vModel.supportsImageRef) {
-    const img = IMAGE_MODELS[choice.imageModel];
+  if (choice.style === "designed") {
     lines.push({
-      label: "Character still",
-      detail: `1 reference frame · ${img.label}`,
-      usd: img.usdPerImage,
+      label: "Designed motion",
+      detail: "art-directed typography, rendered in-browser",
+      usd: 0,
     });
+  } else {
+    const videoUsd = videoSeconds * vModel.usdPerSec;
+    lines.push({
+      label: "AI video",
+      detail: `${aiScenes.length} scenes · ${videoSeconds}s · ${vModel.label} @ $${vModel.usdPerSec}/s`,
+      usd: videoUsd,
+    });
+    if (board.characterRef && vModel.supportsImageRef) {
+      const img = IMAGE_MODELS[choice.imageModel];
+      lines.push({ label: "Character still", detail: `1 reference frame · ${img.label}`, usd: img.usdPerImage });
+    }
   }
 
   const voChars = board.scenes.reduce((n, s) => n + (s.voiceover?.length ?? 0), 0);
