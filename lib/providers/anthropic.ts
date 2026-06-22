@@ -1,4 +1,4 @@
-import type { AspectRatio, ChatMessage, Storyboard } from "../types";
+import type { AspectRatio, ChatMessage, Scene, Storyboard } from "../types";
 import { mockStoryboard } from "./mock";
 
 const API = "https://api.anthropic.com/v1/messages";
@@ -84,7 +84,7 @@ export async function planStoryboard(
     headers: headers(key),
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 4000,
+      max_tokens: 8000,
       system: PLAN_SYSTEM,
       messages: [
         {
@@ -100,7 +100,13 @@ export async function planStoryboard(
     .filter((b: any) => b.type === "text")
     .map((b: any) => b.text)
     .join("");
-  return normalizeBoard(raw, aspectRatio);
+  const board = normalizeBoard(raw, aspectRatio);
+  // Never hand back a blank storyboard. If the model's JSON couldn't be parsed
+  // into scenes, fall back to a deterministic local split of the script.
+  if (board.scenes.length === 0) {
+    return localSplit(script, aspectRatio);
+  }
+  return board;
 }
 
 function mockIdeate(messages: ChatMessage[]): string {
@@ -109,23 +115,54 @@ function mockIdeate(messages: ChatMessage[]): string {
 Open Settings, paste your Anthropic key, and I'll research your company, find the angle, and write the full script in one pass. Until then this is just a dry run of the interface.`;
 }
 
+// Pull the first balanced top-level {...} object out of a noisy string.
+function extractJsonObject(raw: string): string | null {
+  const start = raw.indexOf("{");
+  if (start === -1) return null;
+  let depth = 0;
+  let inStr = false;
+  let esc = false;
+  for (let i = start; i < raw.length; i++) {
+    const c = raw[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === '"') inStr = false;
+    } else if (c === '"') inStr = true;
+    else if (c === "{") depth++;
+    else if (c === "}") {
+      depth--;
+      if (depth === 0) return raw.slice(start, i + 1);
+    }
+  }
+  return null; // unbalanced (truncated)
+}
+
 // Shared: turn raw model JSON (or mock) into a clean Storyboard with safe defaults.
 export function normalizeBoard(raw: string, aspectRatio: AspectRatio): Storyboard {
-  let obj: any;
+  let obj: any = null;
+  const cleaned = raw
+    .trim()
+    .replace(/^```json/i, "")
+    .replace(/^```/, "")
+    .replace(/```$/, "")
+    .trim();
   try {
-    const cleaned = raw
-      .trim()
-      .replace(/^```json/i, "")
-      .replace(/^```/, "")
-      .replace(/```$/, "")
-      .trim();
     obj = JSON.parse(cleaned);
   } catch {
-    // Last resort: pull the first {...} block.
-    const m = raw.match(/\{[\s\S]*\}/);
-    obj = m ? JSON.parse(m[0]) : { scenes: [] };
+    const block = extractJsonObject(cleaned);
+    if (block) {
+      try {
+        obj = JSON.parse(block);
+      } catch {
+        obj = null;
+      }
+    }
   }
-  const scenes = (obj.scenes ?? []).map((s: any, i: number) => ({
+  if (!obj || !Array.isArray(obj.scenes)) {
+    return { title: "Untitled ad", logline: "", aspectRatio, characterRef: null, musicPrompt: "", scenes: [] };
+  }
+  const scenes = obj.scenes.map((s: any, i: number) => ({
     id: `s${i + 1}`,
     index: i,
     durationSec: Math.max(2, Math.min(8, Math.round(s.durationSec ?? 5))),
@@ -143,10 +180,46 @@ export function normalizeBoard(raw: string, aspectRatio: AspectRatio): Storyboar
     title: obj.title ?? "Untitled ad",
     logline: obj.logline ?? "",
     aspectRatio: (obj.aspectRatio as AspectRatio) ?? aspectRatio,
-    characterRef: obj.characterRef?.description
-      ? { description: obj.characterRef.description }
-      : null,
+    characterRef: obj.characterRef?.description ? { description: obj.characterRef.description } : null,
     musicPrompt: obj.musicPrompt ?? "",
+    scenes,
+  };
+}
+
+// Deterministic safety net: split a script into scenes locally so the storyboard
+// is NEVER blank, even if the model's JSON fails entirely.
+export function localSplit(script: string, aspectRatio: AspectRatio): Storyboard {
+  // Break on scene markers, blank lines, or sentences.
+  const chunks = script
+    .replace(/scene\s*\d+\s*[:.\-]?/gi, "\n")
+    .split(/\n+|(?<=[.!?])\s+(?=[A-Z])/)
+    .map((s) => s.trim())
+    .filter((s) => s.length > 1)
+    .slice(0, 14);
+
+  const scenes = (chunks.length ? chunks : [script]).map((line, i) => {
+    const vo = line.replace(/^vo\s*[:\-]\s*/i, "").trim();
+    const looksLikeText = /[A-Z]{3,}|\d|logo|headline|title|%|\$/.test(line) && vo.length < 40;
+    return {
+      id: `s${i + 1}`,
+      index: i,
+      durationSec: 4,
+      visualType: (looksLikeText ? "designed_card" : "ai_video") as Scene["visualType"],
+      videoPrompt: looksLikeText ? "" : `Cinematic shot illustrating: ${vo}. 4 seconds.`,
+      card: looksLikeText ? { headline: vo.slice(0, 40) } : undefined,
+      voiceover: vo,
+      onScreenText: looksLikeText ? vo.slice(0, 40) : "",
+      usesCharacterRef: false,
+      status: "idle" as const,
+    };
+  });
+
+  return {
+    title: chunks[0]?.slice(0, 50) || "Your ad",
+    logline: "Auto-split from your script. Edit any scene below.",
+    aspectRatio,
+    characterRef: null,
+    musicPrompt: "Instrumental bed matching the tone of the script, with a clear build and resolve.",
     scenes,
   };
 }

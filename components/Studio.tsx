@@ -35,6 +35,7 @@ export default function Studio() {
   const [aspect, setAspect] = useState<AspectRatio>("16:9");
   const [board, setBoard] = useState<Storyboard | null>(null);
   const [planning, setPlanning] = useState(false);
+  const [planError, setPlanError] = useState<string>();
   const [activeScene, setActiveScene] = useState<string>();
 
   // Budget / produce
@@ -89,13 +90,18 @@ export default function Studio() {
   async function plan() {
     if (!script.trim()) return;
     setPlanning(true);
+    setPlanError(undefined);
     try {
       const { board } = await api<{ board: Storyboard }>("/api/plan", { script, aspectRatio: aspect });
+      if (!board?.scenes?.length) {
+        setPlanError("The storyboard came back empty. Try again, or shorten the script a little.");
+        return;
+      }
       setBoard(board);
       setActiveScene(board.scenes[0]?.id);
       setStage("storyboard");
     } catch (e: any) {
-      pushLog(`plan error: ${e.message}`);
+      setPlanError(e.message || "Planning failed. Check your Anthropic key in Settings.");
     } finally {
       setPlanning(false);
     }
@@ -202,9 +208,16 @@ export default function Studio() {
             <p className="font-mono text-[11px] text-muted">ai video ads for the rest of us</p>
           </div>
         </div>
-        <button className="btn-ghost" onClick={() => setSettingsOpen(true)}>
-          <Gear className="h-4 w-4" /> {keyed ? "Keys" : "Add keys"}
-        </button>
+        <div className="flex items-center gap-3">
+          {keyed && (
+            <span className="hidden items-center gap-1.5 rounded-full border border-teal/40 bg-teal/10 px-2.5 py-1 text-[11px] text-teal sm:flex">
+              <span className="h-1.5 w-1.5 rounded-full bg-teal" /> your keys · this browser
+            </span>
+          )}
+          <button className="btn-ghost" onClick={() => setSettingsOpen(true)}>
+            <Gear className="h-4 w-4" /> {keyed ? "Keys" : "Add keys"}
+          </button>
+        </div>
       </header>
 
       {/* Stepper */}
@@ -323,6 +336,7 @@ export default function Studio() {
                 Plan storyboard
               </button>
             </div>
+            {planError && <p className="mt-2 text-xs text-marker">{planError}</p>}
           </aside>
         </div>
       )}

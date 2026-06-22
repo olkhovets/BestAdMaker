@@ -32,6 +32,14 @@ export default function Settings({ open, onClose }: { open: boolean; onClose: ()
           Stored only in this browser and sent straight to each provider. Leave a field blank to run
           that step in mock mode.
         </p>
+        <div className="mb-5 rounded-lg border border-teal/30 bg-teal/10 p-3 text-[13px] text-bone">
+          <p className="font-medium text-teal">Publishing this app? Your account is safe.</p>
+          <p className="mt-1 text-muted">
+            These keys never leave your browser, so visitors to your deployed app can't spend them.
+            Each person brings their own keys or runs in free mock mode. Just don't put keys in your
+            Vercel environment variables — that would make everyone share (and drain) your account.
+          </p>
+        </div>
         <div className="space-y-4">
           {FIELDS.map((f) => (
             <div key={f.k}>
