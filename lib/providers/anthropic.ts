@@ -290,16 +290,18 @@ Each concept:
 - headline: max ~8 words, sharp enough to stop a thumb. Wrap the single punch word in *asterisks*.
 - subhead: one short supporting line.
 - cta: 2-3 words (e.g. "Stop guessing", "See it free").
+- imageQuery: 2-4 concrete words naming a real stock PHOTO that fits the concept's mood, the kind a photo library would have (e.g. "empty boardroom", "city at dawn", "hands on keyboard"). Shootable, not abstract.
+- imagePrompt: one vivid art-direction sentence for an AI-generated background image — cinematic, on-brand, evocative. NO text, words, or logos in the image (text is overlaid separately).
 
 No clichés, no em dashes, no three-adjective filler. Return ONLY a JSON array:
-[{"headline":string,"subhead":string,"cta":string}, ...]`;
+[{"headline":string,"subhead":string,"cta":string,"imageQuery":string,"imagePrompt":string}, ...]`;
 
 export async function stillCopy(brief: string, key?: string): Promise<any[]> {
   if (!key) {
     return [
-      { headline: "Stop *guessing* what your market wants.", subhead: "Primary research in hours, not weeks.", cta: "See it free" },
-      { headline: "Ten thousand buyers. *One* morning.", subhead: "Research-grade answers, on demand.", cta: "Start knowing" },
-      { headline: "Not opinions. *Proof.*", subhead: "Decide with evidence, not vibes.", cta: "Book a demo" },
+      { headline: "Stop *guessing* what your market wants.", subhead: "Primary research in hours, not weeks.", cta: "See it free", imageQuery: "empty boardroom", imagePrompt: "A vast empty boardroom at dusk, one chair turned away, dramatic low light, cinematic, moody." },
+      { headline: "Ten thousand buyers. *One* morning.", subhead: "Research-grade answers, on demand.", cta: "Start knowing", imageQuery: "crowd city street", imagePrompt: "A dense crowd of diverse people crossing a sunlit city street, shallow depth of field, energetic, cinematic." },
+      { headline: "Not opinions. *Proof.*", subhead: "Decide with evidence, not vibes.", cta: "Book a demo", imageQuery: "data on screen", imagePrompt: "Soft-focus glowing data visualizations on a dark screen, abstract, premium, cinematic lighting." },
     ];
   }
   const res = await fetch(API, {

@@ -8,6 +8,27 @@ export interface StillConcept {
   headline: string;
   subhead?: string;
   cta?: string;
+  imageQuery?: string; // stock photo search term (photo style)
+  imagePrompt?: string; // AI image art-direction (ai style)
+}
+
+export type StillStyle = "photo" | "ai" | "typography";
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = src; // data URL — same-origin, never taints the canvas
+  });
+}
+
+// Cover-fit an image into w×h (scale to fill, center-crop the overflow).
+function drawCover(ctx: CanvasRenderingContext2D, img: HTMLImageElement, w: number, h: number) {
+  const scale = Math.max(w / img.width, h / img.height);
+  const dw = img.width * scale;
+  const dh = img.height * scale;
+  ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
 }
 
 export interface StillSize {
@@ -82,7 +103,7 @@ function grainTile() {
   return c;
 }
 
-export async function renderStill(concept: StillConcept, theme: Theme | undefined, brandName: string, size: StillSize): Promise<string> {
+export async function renderStill(concept: StillConcept, theme: Theme | undefined, brandName: string, size: StillSize, bg?: string): Promise<string> {
   await ensureFonts();
   const C = theme || DEFAULT_THEME;
   const { w, h } = size;
@@ -92,16 +113,45 @@ export async function renderStill(concept: StillConcept, theme: Theme | undefine
   const ctx = canvas.getContext("2d")!;
   const m = Math.round(Math.min(w, h) * 0.085);
 
-  // Background: brand color, accent glow in a corner, subtle grain.
-  ctx.fillStyle = C.bg;
-  ctx.fillRect(0, 0, w, h);
-  const rad = ctx.createRadialGradient(w * 0.85, h * 0.1, 0, w * 0.85, h * 0.1, Math.max(w, h) * 0.8);
-  rad.addColorStop(0, hexToRgba(C.accent, 0.16));
-  rad.addColorStop(1, hexToRgba(C.accent, 0));
-  ctx.fillStyle = rad;
-  ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = ctx.createPattern(grainTile(), "repeat")!;
-  ctx.fillRect(0, 0, w, h);
+  let img: HTMLImageElement | null = null;
+  if (bg) {
+    try {
+      img = await loadImage(bg);
+    } catch {
+      img = null; // fall back to the gradient treatment below
+    }
+  }
+
+  if (img) {
+    // Photo / AI background: cover-fit the image, then a brand-tinted scrim that
+    // darkens the lower half so the headline and CTA stay legible.
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, w, h);
+    drawCover(ctx, img, w, h);
+    const scrim = ctx.createLinearGradient(0, 0, 0, h);
+    scrim.addColorStop(0, hexToRgba(C.bg, 0.25));
+    scrim.addColorStop(0.45, hexToRgba(C.bg, 0.45));
+    scrim.addColorStop(1, hexToRgba(C.bg, 0.9));
+    ctx.fillStyle = scrim;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = ctx.createPattern(grainTile(), "repeat")!;
+    ctx.fillRect(0, 0, w, h);
+    // Soft shadow keeps text readable over any photo without an ugly solid box.
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = Math.round(Math.min(w, h) * 0.02);
+    ctx.shadowOffsetY = Math.round(Math.min(w, h) * 0.006);
+  } else {
+    // Background: brand color, accent glow in a corner, subtle grain.
+    ctx.fillStyle = C.bg;
+    ctx.fillRect(0, 0, w, h);
+    const rad = ctx.createRadialGradient(w * 0.85, h * 0.1, 0, w * 0.85, h * 0.1, Math.max(w, h) * 0.8);
+    rad.addColorStop(0, hexToRgba(C.accent, 0.16));
+    rad.addColorStop(1, hexToRgba(C.accent, 0));
+    ctx.fillStyle = rad;
+    ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = ctx.createPattern(grainTile(), "repeat")!;
+    ctx.fillRect(0, 0, w, h);
+  }
 
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";

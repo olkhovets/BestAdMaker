@@ -17,6 +17,7 @@ Built because the AI video stack is powerful but scattered across five tools wit
 4. **Budget** — pick your model per job, see the estimated cost (per-second video + per-character voice + token envelope) **before** anything runs. Generate only when you like the number.
 5. **Produce** — fans out: reference still → video per scene → voiceover per line → music bed.
 6. **Assemble** — stitches clips in order, lays VO and a ducked music bed, exports an MP4. Runs in-browser via ffmpeg.wasm, so hosting the public app costs nothing per render.
+7. **Stills** — a standalone tab that produces platform-sized static ads (1080², 1080×1350, 1200×628, 1080×1920) from just a brief — no video required. Claude writes three distinct concepts; each renders in your chosen style: **real photo** (Pexels), **AI image** (fal/FLUX), or **typography** (text on your brand color). Backgrounds are fetched server-side so the canvas export never trips on CORS.
 
 ## Bring your own keys
 

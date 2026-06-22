@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   Sparkles, Clapperboard, Wallet, Clapperboard as Produce, Settings as Gear,
-  ArrowRight, Lock, Send, Loader2, Download, Play, Film, Wand2, Globe,
+  ArrowRight, Lock, Send, Loader2, Download, Play, Film, Wand2, Globe, Image as ImageIcon,
 } from "lucide-react";
 import Settings from "./Settings";
 import Filmstrip from "./Filmstrip";
@@ -10,15 +10,16 @@ import { api, loadKeys, hasAnyKey } from "@/lib/client";
 import { estimateCost, fmtUsd, VIDEO_MODELS, IMAGE_MODELS } from "@/lib/pricing";
 import { VOICE_PRESETS } from "@/lib/providers/elevenlabs";
 import { assemble } from "@/lib/assemble";
-import { renderStill, STILL_SIZES, type StillConcept, type StillSize } from "@/lib/stills";
+import { renderStill, STILL_SIZES, type StillConcept, type StillSize, type StillStyle } from "@/lib/stills";
 import type { AspectRatio, BrandProfile, ChatMessage, ModelChoice, Scene, Storyboard, VideoModelId } from "@/lib/types";
 
-type Stage = "ideate" | "storyboard" | "budget" | "produce";
+type Stage = "ideate" | "storyboard" | "budget" | "produce" | "stills";
 const STAGES: { id: Stage; label: string; icon: any }[] = [
   { id: "ideate", label: "Ideate", icon: Sparkles },
   { id: "storyboard", label: "Storyboard", icon: Clapperboard },
   { id: "budget", label: "Budget", icon: Wallet },
   { id: "produce", label: "Produce", icon: Produce },
+  { id: "stills", label: "Stills", icon: ImageIcon },
 ];
 
 export default function Studio() {
@@ -59,6 +60,8 @@ export default function Studio() {
   const [finalUrl, setFinalUrl] = useState<string>();
   const [stills, setStills] = useState<{ concept: StillConcept; imgs: { size: StillSize; url: string }[] }[]>([]);
   const [stillsLoading, setStillsLoading] = useState(false);
+  const [stillStyle, setStillStyle] = useState<StillStyle>("photo");
+  const [stillBrief, setStillBrief] = useState("");
   const sceneMedia = useRef<Record<string, { url: string; mock?: boolean }>>({});
   const voUrls = useRef<Record<string, string>>({});
   const measuredDur = useRef<Record<string, number>>({});
@@ -296,6 +299,49 @@ export default function Studio() {
     }
   }
 
+  // Shared still engine: Claude writes the copy concepts, then each concept is
+  // rendered at every platform size. For photo/AI styles we fetch one background
+  // per concept (server-proxied to a data URL) and composite the text over it;
+  // if that background is unavailable (mock mode, no key, no match) the concept
+  // falls back to the typography treatment automatically.
+  async function buildStills(brief: string, style: StillStyle) {
+    const { concepts } = await api<{ concepts: StillConcept[] }>("/api/stills", { brief });
+    const theme = brand ? { ...brand.colors, muted: "#8B8275" } : undefined;
+    const brandName = brand?.name || board?.title?.split(" ")[0] || brief.split(/\s+/)[0] || "Your brand";
+    const out: { concept: StillConcept; imgs: { size: StillSize; url: string }[] }[] = [];
+    for (const c of (concepts || []).slice(0, 3)) {
+      let bg: string | undefined;
+      if (style !== "typography") {
+        try {
+          const r = await api<{ dataUrl: string | null }>("/api/still-bg", {
+            style,
+            query: c.imageQuery || c.headline.replace(/\*/g, ""),
+            prompt: c.imagePrompt || c.headline.replace(/\*/g, ""),
+            aspectRatio: "9:16",
+            model: choice.imageModel,
+          });
+          bg = r.dataUrl || undefined;
+        } catch (e: any) {
+          pushLog(`still image failed (using type): ${e.message}`);
+        }
+      }
+      const imgs: { size: StillSize; url: string }[] = [];
+      for (const size of STILL_SIZES) {
+        imgs.push({ size, url: await renderStill(c, theme, brandName, size, bg) });
+      }
+      out.push({ concept: c, imgs });
+    }
+    return out;
+  }
+
+  function defaultStillBrief() {
+    if (brand) return `Brand: ${brand.name}. ${brand.what}\nAudience: ${brand.audience}\nTone: ${brand.tone}`;
+    if (board) return `Brand: ${board.title}. ${board.logline}`;
+    const lastA = [...messages].reverse().find((m) => m.role === "assistant");
+    return lastA?.content?.slice(0, 600) || "";
+  }
+
+  // In-Produce panel: typography stills derived from the finished video (unchanged behavior).
   async function generateStills() {
     if (!board || stillsLoading) return;
     setStillsLoading(true);
@@ -304,18 +350,25 @@ export default function Studio() {
         `Brand: ${brand?.name || board.title}. ${brand?.what || board.logline}\n` +
         `Audience: ${brand?.audience || "marketers"}\nTone: ${brand?.tone || ""}\n` +
         `Video script beats:\n` + board.scenes.map((s) => s.onScreenText || s.voiceover).filter(Boolean).join(" / ");
-      const { concepts } = await api<{ concepts: StillConcept[] }>("/api/stills", { brief });
-      const theme = brand ? { ...brand.colors, muted: "#8B8275" } : undefined;
-      const brandName = brand?.name || board.title.split(" ")[0];
-      const out: { concept: StillConcept; imgs: { size: StillSize; url: string }[] }[] = [];
-      for (const c of (concepts || []).slice(0, 3)) {
-        const imgs: { size: StillSize; url: string }[] = [];
-        for (const size of STILL_SIZES) {
-          imgs.push({ size, url: await renderStill(c, theme, brandName, size) });
-        }
-        out.push({ concept: c, imgs });
-      }
-      setStills(out);
+      setStills(await buildStills(brief, "typography"));
+    } catch (e: any) {
+      pushLog(`stills error: ${e.message}`);
+    } finally {
+      setStillsLoading(false);
+    }
+  }
+
+  // Standalone Stills stage: generate a set from just a brief, in the chosen style.
+  async function generateStandaloneStills() {
+    if (stillsLoading) return;
+    const brief = stillBrief.trim() || defaultStillBrief();
+    if (!brief) {
+      pushLog("add a brief, or pull a brand on Ideate first");
+      return;
+    }
+    setStillsLoading(true);
+    try {
+      setStills(await buildStills(brief, stillStyle));
     } catch (e: any) {
       pushLog(`stills error: ${e.message}`);
     } finally {
@@ -375,6 +428,7 @@ export default function Studio() {
         {STAGES.map((s, i) => {
           const reachable =
             s.id === "ideate" ||
+            s.id === "stills" || // standalone — make stills any time, no video required
             (s.id === "storyboard" && !!script) ||
             (s.id === "budget" && !!board) ||
             (s.id === "produce" && !!board);
@@ -843,6 +897,100 @@ export default function Studio() {
             {stills.length === 0 ? (
               <div className="grid place-items-center rounded-lg border border-dashed border-line py-8 text-sm text-muted">
                 {stillsLoading ? "Writing copy and rendering…" : "Generate a set of static ads to run alongside the video."}
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {stills.map((group, gi) => (
+                  <div key={gi}>
+                    <p className="mb-2 font-display text-bone">{group.concept.headline.replace(/\*/g, "")}</p>
+                    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                      {group.imgs.map((im, ii) => (
+                        <div key={ii} className="rounded-lg border border-line bg-ink/40 p-2">
+                          <img src={im.url} alt="" className="w-full rounded" />
+                          <div className="mt-1.5 flex items-center justify-between">
+                            <span className="text-[10px] text-muted">{im.size.platform}</span>
+                            <a href={im.url} download={`${group.concept.cta || "ad"}-${im.size.id}.png`} className="flex items-center gap-1 text-[11px] text-teal hover:underline">
+                              <Download className="h-3 w-3" /> {im.size.label}
+                            </a>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ---------------- STILLS (standalone) ---------------- */}
+      {stage === "stills" && (
+        <div className="grid gap-5 md:grid-cols-[360px_1fr]">
+          <div className="space-y-4">
+            <div className="panel p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <p className="label">Brief</p>
+                <button className="text-xs text-teal hover:underline" onClick={() => setStillBrief(defaultStillBrief())}>
+                  autofill from brand / script
+                </button>
+              </div>
+              <textarea
+                className="input h-40 resize-none text-[13px] leading-relaxed"
+                placeholder="Who's the brand, what does it do, who's it for? Pull a brand on Ideate to autofill — or just describe it here."
+                value={stillBrief}
+                onChange={(e) => setStillBrief(e.target.value)}
+              />
+              <p className="mt-2 text-[11px] text-muted">No video required — stills generate straight from this brief.</p>
+            </div>
+
+            <div className="panel p-4">
+              <p className="label mb-3">Image style</p>
+              <div className="grid gap-2">
+                {([
+                  { id: "photo", name: "Real photo", note: "Stock photo background matched to each concept. Needs a Pexels key." },
+                  { id: "ai", name: "AI image", note: "A bespoke generated background per concept. Needs a fal key, costs per image." },
+                  { id: "typography", name: "Typography", note: "Bold text on your brand color. No imagery, always free." },
+                ] as { id: StillStyle; name: string; note: string }[]).map((o) => (
+                  <button
+                    key={o.id}
+                    onClick={() => setStillStyle(o.id)}
+                    className={`rounded-lg border p-3 text-left transition ${
+                      stillStyle === o.id ? "border-marker bg-marker/10" : "border-line hover:border-muted"
+                    }`}
+                  >
+                    <span className="font-medium text-bone">{o.name}</span>
+                    <p className="mt-0.5 text-xs text-muted">{o.note}</p>
+                  </button>
+                ))}
+              </div>
+              {stillStyle === "ai" && (
+                <div className="mt-3">
+                  <p className="label mb-1">Image model</p>
+                  <select className="input" value={choice.imageModel} onChange={(e) => setChoice({ ...choice, imageModel: e.target.value as any })}>
+                    {Object.entries(IMAGE_MODELS).map(([id, m]) => <option key={id} value={id}>{m.label}</option>)}
+                  </select>
+                </div>
+              )}
+              <button className="btn-primary mt-4 w-full" onClick={generateStandaloneStills} disabled={stillsLoading}>
+                {stillsLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />}
+                Generate stills
+              </button>
+              {!keyed && <p className="mt-2 text-[11px] text-teal">No keys yet — runs as a free mock with placeholder copy and typography.</p>}
+            </div>
+          </div>
+
+          <div className="panel p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="label">Still creatives</p>
+                <p className="mt-1 text-xs text-muted">Agency-style static ads in your brand, sized for each platform.</p>
+              </div>
+              <span className="label">{STILL_SIZES.length} sizes</span>
+            </div>
+            {stills.length === 0 ? (
+              <div className="grid min-h-[40vh] place-items-center rounded-lg border border-dashed border-line text-sm text-muted">
+                {stillsLoading ? "Writing copy and rendering…" : "Your still ads will appear here, sized for each platform."}
               </div>
             ) : (
               <div className="space-y-6">

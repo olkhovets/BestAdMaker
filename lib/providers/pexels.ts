@@ -1,11 +1,39 @@
 import type { AspectRatio } from "../types";
 
 const API = "https://api.pexels.com/videos/search";
+const PHOTO_API = "https://api.pexels.com/v1/search";
 
 function orientation(ar: AspectRatio) {
   if (ar === "9:16") return "portrait";
   if (ar === "1:1") return "square";
   return "landscape";
+}
+
+// Returns a direct photo URL matching the query (for still-image ad backgrounds),
+// or null in mock mode. `exclude` keeps a set of stills from reusing the same photo.
+export async function searchPhoto(opts: {
+  query: string;
+  aspectRatio: AspectRatio;
+  key?: string;
+  exclude?: string[];
+}): Promise<{ url: string | null; mock?: boolean }> {
+  if (!opts.key) return { url: null, mock: true };
+  const url = `${PHOTO_API}?query=${encodeURIComponent(opts.query)}&per_page=15&orientation=${orientation(opts.aspectRatio)}`;
+  const res = await fetch(url, { headers: { Authorization: opts.key } });
+  if (!res.ok) throw new Error(`Pexels ${res.status}: ${await res.text()}`);
+  const data = await res.json();
+  const photos = data.photos ?? [];
+  if (!photos.length) return { url: null };
+  const exclude = new Set(opts.exclude ?? []);
+  let firstAvailable: string | null = null;
+  for (const p of photos) {
+    // large2x (~1880px wide) is sharp enough for every still size, light enough to ship.
+    const link = p.src?.large2x || p.src?.large || p.src?.original || null;
+    if (!link) continue;
+    if (firstAvailable === null) firstAvailable = link;
+    if (!exclude.has(link)) return { url: link };
+  }
+  return { url: firstAvailable };
 }
 
 // Pick the best mp4 file for one video: prefer ~1280–1920 wide (sharp but light
