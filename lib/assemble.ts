@@ -57,6 +57,21 @@ export async function assemble(input: AssembleInput): Promise<string> {
   const dur = (id: string, fallback: number) =>
     Math.max(2, Math.min(12, durations[id] ?? fallback));
 
+  const N = board.scenes.length;
+  const totalDur = board.scenes.reduce((acc, s) => acc + dur(s.id, s.durationSec), 0);
+
+  // Cut treatment: a gentle dip-through-black on every cut so cuts read as
+  // intentional rather than jarring; a longer fade opens from / closes to black.
+  const OPEN = 0.4; // master fade-in on the very first scene
+  const CLOSE = 0.5; // master fade-out on the very last scene
+  const DIP = 0.12; // internal cut dip
+  const fadeFilter = (i: number, d: number) => {
+    const fin = i === 0 ? OPEN : DIP;
+    const foutD = i === N - 1 ? CLOSE : DIP;
+    const foutSt = Math.max(0, d - foutD);
+    return `fade=t=in:st=0:d=${fin},fade=t=out:st=${foutSt}:d=${foutD}`;
+  };
+
   const segFiles: string[] = [];
 
   for (let i = 0; i < board.scenes.length; i++) {
@@ -65,6 +80,7 @@ export async function assemble(input: AssembleInput): Promise<string> {
     const seg = `seg${i}.mp4`;
     const media = sceneMedia[scene.id];
     const frames = Math.max(1, Math.round(d * FPS));
+    const vfade = fadeFilter(i, d);
 
     const hasFootage = style === "stock" && media?.url && !media.mock;
     const hasClip = style === "ai_video" && media?.url && !media.mock;
@@ -84,7 +100,7 @@ export async function assemble(input: AssembleInput): Promise<string> {
       await ffmpeg.exec([
         "-stream_loop", "-1", "-i", `clip${i}`,
         "-t", String(d),
-        "-vf", `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${FPS}`,
+        "-vf", `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${FPS},${vfade}`,
         "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), seg,
       ]);
     } else if (footageOK && hasFootage) {
@@ -98,7 +114,7 @@ export async function assemble(input: AssembleInput): Promise<string> {
         "-stream_loop", "-1", "-i", `clip${i}`,
         "-framerate", String(FPS), "-i", `t${i}_%04d.png`,
         "-filter_complex",
-        `[0:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${FPS}[bg];[bg][1:v]overlay=shortest=0[v]`,
+        `[0:v]scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${FPS}[bg];[bg][1:v]overlay=shortest=0[ov];[ov]${vfade}[v]`,
         "-map", "[v]", "-t", String(d), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), seg,
       ]);
       for (let f = 0; f < frames; f++) {
@@ -113,7 +129,7 @@ export async function assemble(input: AssembleInput): Promise<string> {
       }
       await ffmpeg.exec([
         "-framerate", String(FPS), "-i", `f${i}_%04d.png`,
-        "-t", String(d), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), seg,
+        "-t", String(d), "-vf", vfade, "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", String(FPS), seg,
       ]);
       for (let f = 0; f < frames; f++) {
         try { await ffmpeg.deleteFile(`f${i}_${String(f).padStart(4, "0")}.png`); } catch {}
@@ -150,17 +166,44 @@ export async function assemble(input: AssembleInput): Promise<string> {
   await ffmpeg.writeFile("vo.txt", voList.map((f) => `file '${f}'`).join("\n"));
   await ffmpeg.exec(["-f", "concat", "-safe", "0", "-i", "vo.txt", "-c", "copy", "vo.mp3"]);
 
+  const musOut = Math.max(0, totalDur - 1.8); // music fade-out start
+  const masterOut = Math.max(0, totalDur - CLOSE); // audio closes with the picture
+
   if (musicUrl && !musicUrl.startsWith("data:audio/wav")) {
     await ffmpeg.writeFile("music.mp3", await fetchFile(musicUrl));
-    await ffmpeg.exec([
+    // Professional mix: the music bed is sidechain-ducked by the voiceover, so it
+    // automatically dips under spoken lines and swells back in the silences. Both
+    // beds are normalized to a common format first (sidechaincompress requires it),
+    // music fades in/out, and the whole mix closes with the final dip-to-black.
+    // ffmpeg.exec resolves with the exit code (it does not throw), so we branch on it.
+    try { await ffmpeg.deleteFile("final.mp4"); } catch {}
+    const code = await ffmpeg.exec([
       "-i", "video.mp4", "-i", "vo.mp3", "-i", "music.mp3",
-      "-filter_complex", "[2:a]volume=0.25[m];[1:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
+      "-filter_complex",
+      "[1:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[vo1][vo2];" +
+        `[2:a]aformat=sample_rates=44100:channel_layouts=stereo,volume=0.55,afade=t=in:st=0:d=1.2,afade=t=out:st=${musOut}:d=1.8[mus];` +
+        "[mus][vo2]sidechaincompress=threshold=0.04:ratio=9:attack=15:release=320[duck];" +
+        `[vo1][duck]amix=inputs=2:duration=first:dropout_transition=0,afade=t=out:st=${masterOut}:d=${CLOSE}[a]`,
       "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", "final.mp4",
     ]);
+    if (code !== 0) {
+      // sidechaincompress isn't in every ffmpeg.wasm core build. Fall back to a
+      // still-improved mix: a low, faded bed under a full-level VO — no ducking,
+      // but cleaner than a flat bed and guaranteed-available filters only.
+      log("ducked mix unavailable, using faded bed");
+      await ffmpeg.exec([
+        "-i", "video.mp4", "-i", "vo.mp3", "-i", "music.mp3",
+        "-filter_complex",
+        `[2:a]volume=0.18,afade=t=in:st=0:d=1.2,afade=t=out:st=${musOut}:d=1.8[mus];` +
+          `[1:a][mus]amix=inputs=2:duration=first:dropout_transition=0,afade=t=out:st=${masterOut}:d=${CLOSE}[a]`,
+        "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", "final.mp4",
+      ]);
+    }
   } else {
     await ffmpeg.exec([
       "-i", "video.mp4", "-i", "vo.mp3",
-      "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-shortest", "final.mp4",
+      "-filter_complex", `[1:a]afade=t=out:st=${masterOut}:d=${CLOSE}[a]`,
+      "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-shortest", "final.mp4",
     ]);
   }
   log("mixed");

@@ -7,9 +7,9 @@ export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
-    const { query, aspectRatio } = await req.json();
+    const { query, aspectRatio, exclude } = await req.json();
     const keys = resolveKeys(req);
-    const out = await searchFootage({ query, aspectRatio, key: keys.pexels });
+    const out = await searchFootage({ query, aspectRatio, key: keys.pexels, exclude });
     return Response.json(out);
   } catch (e: any) {
     return jsonError(e?.message ?? "footage search failed");

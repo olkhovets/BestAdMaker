@@ -231,14 +231,18 @@ export default function Studio() {
         addDebug("visuals", "ok", "designed motion — rendered at assembly, no video API cost");
       }
 
-      // 2b. Stock footage per scene (matched to the script beat)
+      // 2b. Stock footage per scene (matched to the script beat). Track every clip
+      // we've used so repeated footage queries don't pull the same b-roll twice —
+      // distinct visuals per scene are a big step up from a looping montage.
       if (choice.style === "stock") {
+        const usedFootage: string[] = [];
         for (const s of board.scenes) {
           const q = s.footageQuery?.trim() || s.onScreenText || board.title;
           addDebug(`scene ${s.index + 1}`, "req", `footage · "${q}"`);
           try {
-            const r = await api<{ url: string | null; mock?: boolean }>("/api/footage", { query: q, aspectRatio: board.aspectRatio });
+            const r = await api<{ url: string | null; mock?: boolean }>("/api/footage", { query: q, aspectRatio: board.aspectRatio, exclude: usedFootage });
             if (r.url) {
+              usedFootage.push(r.url);
               sceneMedia.current[s.id] = { url: r.url, mock: r.mock };
               addDebug(`scene ${s.index + 1}`, r.mock ? "err" : "ok", r.mock ? "footage mock (no Pexels key) → designed motion" : "footage matched");
             } else {
