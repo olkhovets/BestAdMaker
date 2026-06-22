@@ -2,12 +2,13 @@ import { createFalClient } from "@fal-ai/client";
 import type { AspectRatio, VideoModelId, ImageModelId } from "../types";
 import { mockVideo, mockImage } from "./mock";
 
-// Different video models only accept specific clip lengths. Map our 2-8s scene
-// duration onto each model's allowed values so fal doesn't reject the request.
-function durationFor(model: VideoModelId, sec: number): string | number {
-  const s = Math.max(2, Math.min(8, Math.round(sec)));
-  if (model.includes("kling") || model.includes("seedance")) return s > 7 ? "10" : "5";
-  return s; // veo accepts a numeric range
+const KLING_TEXT = "fal-ai/kling-video/v3/standard/text-to-video";
+const KLING_IMAGE = "fal-ai/kling-video/v2.1/pro/image-to-video";
+const VEO = "fal-ai/veo3.1";
+
+function klingDuration(sec: number): string {
+  // Kling accepts "5" or "10". Round our 2-8s scene up to the nearest valid value.
+  return Math.round(sec) > 6 ? "10" : "5";
 }
 
 function imageSize(ar: AspectRatio) {
@@ -25,12 +26,47 @@ function pickUrl(data: any, keys: string[]): string | undefined {
 }
 
 function friendlyError(e: any): string {
-  // fal ValidationError carries a body with field-level detail — surface it.
-  const detail = e?.body?.detail;
+  const detail = e?.body?.detail ?? e?.body?.message ?? e?.body;
   if (Array.isArray(detail)) {
     return detail.map((d: any) => `${(d.loc || []).join(".")}: ${d.msg}`).join("; ");
   }
+  if (typeof detail === "string") return detail;
+  if (detail) return JSON.stringify(detail);
   return e?.message || "fal request failed";
+}
+
+// Build the right model id + input for the chosen family. Critically: if an
+// image-to-video model was chosen but we have no reference image, fall back to
+// the text-to-video sibling so the scene still generates instead of erroring.
+function buildVideoCall(opts: {
+  model: VideoModelId;
+  prompt: string;
+  durationSec: number;
+  aspectRatio: AspectRatio;
+  imageUrl?: string;
+}): { model: string; input: any } {
+  const { prompt, durationSec, aspectRatio, imageUrl } = opts;
+
+  if (opts.model === KLING_IMAGE) {
+    if (imageUrl) {
+      return {
+        model: KLING_IMAGE,
+        input: { prompt, image_url: imageUrl, duration: klingDuration(durationSec), aspect_ratio: aspectRatio },
+      };
+    }
+    // No reference image — degrade gracefully to text-to-video.
+    return {
+      model: KLING_TEXT,
+      input: { prompt, duration: klingDuration(durationSec), aspect_ratio: aspectRatio },
+    };
+  }
+
+  if (opts.model === VEO) {
+    return { model: VEO, input: { prompt, resolution: "720p", aspect_ratio: aspectRatio, audio: false } };
+  }
+
+  // Kling text-to-video (default)
+  return { model: KLING_TEXT, input: { prompt, duration: klingDuration(durationSec), aspect_ratio: aspectRatio } };
 }
 
 export async function generateVideo(opts: {
@@ -41,26 +77,17 @@ export async function generateVideo(opts: {
   imageUrl?: string;
   index: number;
   key?: string;
-}): Promise<{ url: string; mock?: boolean; prompt?: string; index?: number }> {
+}): Promise<{ url: string; mock?: boolean; prompt?: string; index?: number; usedModel?: string }> {
   if (!opts.key) return mockVideo(opts.prompt, opts.index);
   const fal = createFalClient({ credentials: opts.key });
-
-  const input: any = {
-    prompt: opts.prompt,
-    duration: durationFor(opts.model, opts.durationSec),
-    aspect_ratio: opts.aspectRatio,
-  };
-  if (opts.imageUrl && opts.model.includes("image-to-video")) {
-    input.image_url = opts.imageUrl;
-  }
-
+  const { model, input } = buildVideoCall(opts);
   try {
-    const { data } = await fal.subscribe(opts.model, { input });
+    const { data } = await fal.subscribe(model, { input });
     const url = pickUrl(data, ["video.url", "url"]);
-    if (!url) throw new Error("fal returned no video url");
-    return { url };
+    if (!url) throw new Error(`fal returned no video url (model ${model})`);
+    return { url, usedModel: model };
   } catch (e: any) {
-    throw new Error(friendlyError(e));
+    throw new Error(`[${model}] ${friendlyError(e)}`);
   }
 }
 
@@ -80,6 +107,6 @@ export async function generateImage(opts: {
     if (!url) throw new Error("fal returned no image url");
     return { url };
   } catch (e: any) {
-    throw new Error(friendlyError(e));
+    throw new Error(`[${opts.model}] ${friendlyError(e)}`);
   }
 }

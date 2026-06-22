@@ -12,35 +12,23 @@ export const VIDEO_MODELS: Record<
   VideoModelId,
   { label: string; usdPerSec: number; supportsImageRef: boolean; note: string }
 > = {
-  "fal-ai/kling-video/v2/standard/text-to-video": {
+  "fal-ai/kling-video/v3/standard/text-to-video": {
     label: "Kling 3.0 (text→video)",
     usdPerSec: 0.1,
     supportsImageRef: false,
-    note: "Cheapest premium model. Great motion. No character continuity.",
+    note: "Cheapest, reliable, needs no reference image. Best default.",
   },
-  "fal-ai/kling-video/v2/standard/image-to-video": {
-    label: "Kling 3.0 (image→video)",
-    usdPerSec: 0.1,
-    supportsImageRef: true,
-    note: "Animate a reference still — keeps a character consistent across scenes.",
-  },
-  "fal-ai/veo/fast": {
-    label: "Veo 3.1 Fast",
+  "fal-ai/kling-video/v2.1/pro/image-to-video": {
+    label: "Kling 2.1 Pro (image→video)",
     usdPerSec: 0.15,
     supportsImageRef: true,
-    note: "Best all-rounder with native audio. Fast tier.",
+    note: "Animates a reference still to keep a character consistent across scenes.",
   },
-  "fal-ai/veo/quality": {
-    label: "Veo 3.1 Quality",
-    usdPerSec: 0.5,
-    supportsImageRef: true,
-    note: "Highest fidelity. Reserve for the final render of hero shots.",
-  },
-  "fal-ai/bytedance/seedance/v1/pro": {
-    label: "Seedance Pro",
-    usdPerSec: 0.3,
-    supportsImageRef: true,
-    note: "Strong image→video and multi-shot consistency.",
+  "fal-ai/veo3.1": {
+    label: "Veo 3.1 (text→video, native audio)",
+    usdPerSec: 0.4,
+    supportsImageRef: false,
+    note: "Highest quality with synced audio. Pricier ($0.40/s with audio).",
   },
 };
 

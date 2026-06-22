@@ -49,11 +49,9 @@ export interface ModelChoice {
 }
 
 export type VideoModelId =
-  | "fal-ai/kling-video/v2/standard/text-to-video"
-  | "fal-ai/kling-video/v2/standard/image-to-video"
-  | "fal-ai/veo/fast"
-  | "fal-ai/veo/quality"
-  | "fal-ai/bytedance/seedance/v1/pro";
+  | "fal-ai/kling-video/v3/standard/text-to-video"
+  | "fal-ai/kling-video/v2.1/pro/image-to-video"
+  | "fal-ai/veo3.1";
 
 export type ImageModelId = "fal-ai/flux/dev" | "fal-ai/flux-pro/v1.1";
 

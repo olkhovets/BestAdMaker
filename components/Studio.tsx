@@ -40,13 +40,17 @@ export default function Studio() {
 
   // Budget / produce
   const [choice, setChoice] = useState<ModelChoice>({
-    videoModel: "fal-ai/kling-video/v2/standard/image-to-video",
+    videoModel: "fal-ai/kling-video/v3/standard/text-to-video",
     imageModel: "fal-ai/flux/dev",
     voiceId: VOICE_PRESETS[0].id,
     music: true,
   });
   const [producing, setProducing] = useState(false);
   const [log, setLog] = useState<string[]>([]);
+  const [debug, setDebug] = useState<
+    { t: string; scene: string; kind: "req" | "ok" | "err"; label: string; detail?: string }[]
+  >([]);
+  const [showDebug, setShowDebug] = useState(true);
   const [finalUrl, setFinalUrl] = useState<string>();
   const sceneMedia = useRef<Record<string, { url: string; mock?: boolean }>>({});
   const voUrls = useRef<Record<string, string>>({});
@@ -54,6 +58,16 @@ export default function Studio() {
 
   const keyed = hasAnyKey(loadKeys());
   const pushLog = (s: string) => setLog((l) => [...l.slice(-40), s]);
+  const addDebug = (
+    scene: string,
+    kind: "req" | "ok" | "err",
+    label: string,
+    detail?: string
+  ) =>
+    setDebug((d) => [
+      ...d,
+      { t: new Date().toLocaleTimeString(), scene, kind, label, detail },
+    ]);
 
   async function send() {
     if (!input.trim() || thinking) return;
@@ -120,6 +134,7 @@ export default function Studio() {
     if (!board) return;
     setProducing(true);
     setFinalUrl(undefined);
+    setDebug([]);
     sceneMedia.current = {};
     voUrls.current = {};
     const supportsRef = VIDEO_MODELS[choice.videoModel].supportsImageRef;
@@ -128,14 +143,16 @@ export default function Studio() {
       // 1. Reference still for continuity (non-fatal if it fails)
       let refUrl: string | undefined;
       if (board.characterRef && supportsRef) {
+        const payload = { model: choice.imageModel, prompt: board.characterRef.description, aspectRatio: board.aspectRatio };
+        addDebug("ref", "req", `image · ${choice.imageModel}`, JSON.stringify(payload, null, 2));
         pushLog("generating character still…");
         try {
-          const r = await api<{ url: string }>("/api/generate/image", {
-            model: choice.imageModel, prompt: board.characterRef.description, aspectRatio: board.aspectRatio,
-          });
+          const r = await api<{ url: string }>("/api/generate/image", payload);
           refUrl = r.url || undefined;
+          addDebug("ref", "ok", `image url: ${r.url || "(mock)"}`);
         } catch (e: any) {
-          pushLog(`character still failed (continuing without it): ${e.message}`);
+          addDebug("ref", "err", "image failed", e.message);
+          pushLog(`character still failed (continuing): ${e.message}`);
         }
       }
 
@@ -143,18 +160,22 @@ export default function Studio() {
       for (const s of board.scenes) {
         if (s.visualType !== "ai_video") continue;
         updateScene(s.id, { status: "running" });
+        const payload = {
+          model: choice.videoModel, prompt: s.videoPrompt, durationSec: s.durationSec,
+          aspectRatio: board.aspectRatio, index: s.index,
+          imageUrl: s.usesCharacterRef ? refUrl : undefined,
+        };
+        addDebug(`scene ${s.index + 1}`, "req", `video · ${choice.videoModel}`, JSON.stringify(payload, null, 2));
         pushLog(`scene ${s.index + 1}: video…`);
         try {
-          const r = await api<{ url: string; mock?: boolean }>("/api/generate/video", {
-            model: choice.videoModel, prompt: s.videoPrompt, durationSec: s.durationSec,
-            aspectRatio: board.aspectRatio, index: s.index,
-            imageUrl: s.usesCharacterRef ? refUrl : undefined,
-          });
+          const r = await api<{ url: string; mock?: boolean }>("/api/generate/video", payload);
           sceneMedia.current[s.id] = { url: r.url, mock: r.mock };
           updateScene(s.id, { status: "done", videoUrl: r.url || `mock:${s.index}` });
-          pushLog(`scene ${s.index + 1}: done`);
+          addDebug(`scene ${s.index + 1}`, r.mock ? "err" : "ok", r.mock ? "returned MOCK (no fal key?)" : `video url: ${r.url}`);
+          pushLog(`scene ${s.index + 1}: ${r.mock ? "mock" : "done"}`);
         } catch (e: any) {
           updateScene(s.id, { status: "error", error: e.message });
+          addDebug(`scene ${s.index + 1}`, "err", "video failed", e.message);
           pushLog(`scene ${s.index + 1} failed: ${e.message}`);
         }
       }
@@ -164,9 +185,11 @@ export default function Studio() {
         if (!s.voiceover?.trim()) continue;
         pushLog(`scene ${s.index + 1}: voiceover…`);
         try {
-          const r = await api<{ dataUrl: string }>("/api/generate/voice", { text: s.voiceover, voiceId: choice.voiceId });
+          const r = await api<{ dataUrl: string; mock?: boolean }>("/api/generate/voice", { text: s.voiceover, voiceId: choice.voiceId });
           voUrls.current[s.id] = r.dataUrl;
+          addDebug(`scene ${s.index + 1}`, r.mock ? "err" : "ok", r.mock ? "VO mock (no ElevenLabs key?)" : "VO ok");
         } catch (e: any) {
+          addDebug(`scene ${s.index + 1}`, "err", "VO failed", e.message);
           pushLog(`scene ${s.index + 1} VO failed: ${e.message}`);
         }
       }
@@ -176,14 +199,17 @@ export default function Studio() {
         pushLog("music bed…");
         try {
           const totalMs = board.scenes.reduce((n, s) => n + s.durationSec, 0) * 1000;
-          const r = await api<{ dataUrl: string }>("/api/generate/music", { prompt: board.musicPrompt, lengthMs: totalMs });
+          const r = await api<{ dataUrl: string; mock?: boolean }>("/api/generate/music", { prompt: board.musicPrompt, lengthMs: totalMs });
           musicUrl.current = r.dataUrl;
+          addDebug("music", r.mock ? "err" : "ok", r.mock ? "music mock (no key?)" : "music ok");
         } catch (e: any) {
-          pushLog(`music failed (continuing without it): ${e.message}`);
+          addDebug("music", "err", "music failed", e.message);
+          pushLog(`music failed (continuing): ${e.message}`);
         }
       }
       pushLog("all assets ready. assemble when you are.");
     } catch (e: any) {
+      addDebug("run", "err", "produce error", e.message);
       pushLog(`produce error: ${e.message}`);
     } finally {
       setProducing(false);
@@ -583,12 +609,67 @@ export default function Studio() {
                 )}
               </div>
             </div>
-            <aside className="panel p-4">
-              <p className="label mb-3">Production log</p>
-              <div className="h-64 space-y-1 overflow-y-auto font-mono text-[11px] text-muted">
-                {log.length === 0 && <p>waiting…</p>}
-                {log.map((l, i) => <p key={i}>{l}</p>)}
+            <aside className="panel flex max-h-[520px] flex-col p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="label">Debug</p>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="text-[11px] text-teal hover:underline"
+                    onClick={() => setShowDebug((v) => !v)}
+                  >
+                    {showDebug ? "show raw log" : "show debug"}
+                  </button>
+                  <button
+                    className="text-[11px] text-teal hover:underline"
+                    onClick={() => {
+                      const text = debug
+                        .map((d) => `[${d.t}] ${d.scene} · ${d.kind.toUpperCase()} · ${d.label}${d.detail ? "\n" + d.detail : ""}`)
+                        .join("\n\n");
+                      navigator.clipboard?.writeText(text || "(empty)");
+                      pushLog("debug copied to clipboard");
+                    }}
+                  >
+                    copy
+                  </button>
+                </div>
               </div>
+              {showDebug ? (
+                <div className="flex-1 space-y-2 overflow-y-auto">
+                  {debug.length === 0 && <p className="font-mono text-[11px] text-muted">no events yet — hit Re-generate</p>}
+                  {debug.map((d, i) => (
+                    <div
+                      key={i}
+                      className={`rounded-md border p-2 text-[11px] ${
+                        d.kind === "err"
+                          ? "border-marker/50 bg-marker/10"
+                          : d.kind === "ok"
+                          ? "border-teal/30 bg-teal/5"
+                          : "border-line bg-ink/40"
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-bone">{d.scene}</span>
+                        <span className={`font-mono ${d.kind === "err" ? "text-marker" : d.kind === "ok" ? "text-teal" : "text-muted"}`}>
+                          {d.kind}
+                        </span>
+                      </div>
+                      <p className="mt-0.5 text-bone/90">{d.label}</p>
+                      {d.detail && (
+                        <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words font-mono text-[10px] text-muted">
+                          {d.detail}
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex-1 space-y-1 overflow-y-auto font-mono text-[11px] text-muted">
+                  {log.length === 0 && <p>waiting…</p>}
+                  {log.map((l, i) => (
+                    <p key={i}>{l}</p>
+                  ))}
+                </div>
+              )}
             </aside>
           </div>
         </div>
