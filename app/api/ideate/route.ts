@@ -9,8 +9,9 @@ export async function POST(req: NextRequest) {
   try {
     const { messages, mode } = await req.json();
     const keys = resolveKeys(req);
-    const reply = await ideate(messages ?? [], keys.anthropic, mode === "script" ? "script" : "chat");
-    return Response.json({ reply, mock: !keys.anthropic });
+    const aspen = { key: keys.aspen, baseUrl: keys.aspenBaseUrl, model: keys.aspenModel };
+    const reply = await ideate(messages ?? [], keys.anthropic, mode === "script" ? "script" : "chat", aspen);
+    return Response.json({ reply, mock: !keys.anthropic && !keys.aspen });
   } catch (e: any) {
     return jsonError(e?.message ?? "ideate failed");
   }

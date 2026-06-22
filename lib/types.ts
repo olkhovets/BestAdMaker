@@ -78,6 +78,12 @@ export interface ApiKeys {
   fal?: string;
   elevenlabs?: string;
   pexels?: string;
+  // Aspen: an OpenAI-compatible (local) LLM endpoint. When the key is set it
+  // takes over the text work (creative director, script, storyboard, brand,
+  // stills copy) in place of Claude. baseUrl/model are config, not secrets.
+  aspen?: string;
+  aspenBaseUrl?: string;
+  aspenModel?: string;
 }
 
 export interface BrandProfile {

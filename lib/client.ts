@@ -22,6 +22,9 @@ function keyHeaders(keys: ApiKeys): Record<string, string> {
   if (keys.fal) h["x-fal-key"] = keys.fal;
   if (keys.elevenlabs) h["x-elevenlabs-key"] = keys.elevenlabs;
   if (keys.pexels) h["x-pexels-key"] = keys.pexels;
+  if (keys.aspen) h["x-aspen-key"] = keys.aspen;
+  if (keys.aspenBaseUrl) h["x-aspen-base-url"] = keys.aspenBaseUrl;
+  if (keys.aspenModel) h["x-aspen-model"] = keys.aspenModel;
   return h;
 }
 
@@ -37,5 +40,5 @@ export async function api<T>(path: string, body: unknown): Promise<T> {
 }
 
 export function hasAnyKey(k: ApiKeys) {
-  return !!(k.anthropic || k.fal || k.elevenlabs);
+  return !!(k.anthropic || k.fal || k.elevenlabs || k.aspen);
 }

@@ -1,5 +1,6 @@
 import type { AspectRatio, ChatMessage, Scene, Storyboard } from "../types";
 import { mockStoryboard } from "./mock";
+import { aspenChat, aspenConfigured, type AspenConfig } from "./aspen";
 
 const API = "https://api.anthropic.com/v1/messages";
 const MODEL = "claude-sonnet-4-6";
@@ -69,8 +70,14 @@ function extractText(data: any): string {
 export async function ideate(
   messages: ChatMessage[],
   key?: string,
-  mode: "chat" | "script" = "chat"
+  mode: "chat" | "script" = "chat",
+  aspen?: AspenConfig
 ): Promise<string> {
+  const system = mode === "script" ? SCRIPT_SYSTEM : CREATIVE_SYSTEM;
+  if (aspenConfigured(aspen)) {
+    // Local model — no web_search tool; relies on the model's own knowledge.
+    return aspenChat({ system, messages, maxTokens: 2000 }, aspen!);
+  }
   if (!key) {
     return mockIdeate(messages);
   }
@@ -80,7 +87,7 @@ export async function ideate(
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 2000,
-      system: mode === "script" ? SCRIPT_SYSTEM : CREATIVE_SYSTEM,
+      system,
       tools: [WEB_SEARCH_TOOL],
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
     }),
@@ -106,32 +113,36 @@ Return ONLY the JSON object, no prose, no code fences:
 export async function planStoryboard(
   script: string,
   aspectRatio: AspectRatio,
-  key?: string
+  key?: string,
+  aspen?: AspenConfig
 ): Promise<Storyboard> {
-  if (!key) {
+  const userContent = `Aspect ratio: ${aspectRatio}\n\nScript:\n${script}`;
+  let raw: string;
+  if (aspenConfigured(aspen)) {
+    raw = await aspenChat(
+      { system: PLAN_SYSTEM, messages: [{ role: "user", content: userContent }], maxTokens: 8000 },
+      aspen!
+    );
+  } else if (!key) {
     return mockStoryboard(script, aspectRatio);
+  } else {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: headers(key),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 8000,
+        system: PLAN_SYSTEM,
+        messages: [{ role: "user", content: userContent }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    raw = (data.content ?? [])
+      .filter((b: any) => b.type === "text")
+      .map((b: any) => b.text)
+      .join("");
   }
-  const res = await fetch(API, {
-    method: "POST",
-    headers: headers(key),
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 8000,
-      system: PLAN_SYSTEM,
-      messages: [
-        {
-          role: "user",
-          content: `Aspect ratio: ${aspectRatio}\n\nScript:\n${script}`,
-        },
-      ],
-    }),
-  });
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const raw = (data.content ?? [])
-    .filter((b: any) => b.type === "text")
-    .map((b: any) => b.text)
-    .join("");
   const board = normalizeBoard(raw, aspectRatio);
   // Never hand back a blank storyboard. If the model's JSON couldn't be parsed
   // into scenes, fall back to a deterministic local split of the script.
@@ -262,24 +273,29 @@ const BRAND_SYSTEM = `You extract a brand profile from a company's website HTML.
 
 For colors: use any brand colors you can find in the HTML (inline styles, <style> blocks, theme-color meta, hex codes). The bg should be a deep on-brand background, text a high-contrast readable color, accent the brand's signature color. If you cannot find real colors, infer a tasteful palette that matches the brand's vibe. Always return valid 6-digit hex values.`;
 
-export async function extractBrand(url: string, html: string, key?: string): Promise<any> {
-  if (!key) {
-    return { name: "", what: "", audience: "", tone: "", colors: { bg: "#0E0E0F", text: "#ECE7DA", accent: "#FF5631" }, mock: true };
-  }
+export async function extractBrand(url: string, html: string, key?: string, aspen?: AspenConfig): Promise<any> {
   const trimmed = html.replace(/<script[\s\S]*?<\/script>/gi, "").slice(0, 18000);
-  const res = await fetch(API, {
-    method: "POST",
-    headers: headers(key),
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 800,
-      system: BRAND_SYSTEM,
-      messages: [{ role: "user", content: `URL: ${url}\n\nHTML:\n${trimmed}` }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const raw = (data.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+  const userContent = `URL: ${url}\n\nHTML:\n${trimmed}`;
+  let raw: string;
+  if (aspenConfigured(aspen)) {
+    raw = await aspenChat({ system: BRAND_SYSTEM, messages: [{ role: "user", content: userContent }], maxTokens: 800 }, aspen!);
+  } else if (!key) {
+    return { name: "", what: "", audience: "", tone: "", colors: { bg: "#0E0E0F", text: "#ECE7DA", accent: "#FF5631" }, mock: true };
+  } else {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: headers(key),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 800,
+        system: BRAND_SYSTEM,
+        messages: [{ role: "user", content: userContent }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    raw = (data.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
+  }
   const m = raw.match(/\{[\s\S]*\}/);
   return m ? JSON.parse(m[0]) : null;
 }
@@ -296,27 +312,31 @@ Each concept:
 No clichés, no em dashes, no three-adjective filler. Return ONLY a JSON array:
 [{"headline":string,"subhead":string,"cta":string,"imageQuery":string,"imagePrompt":string}, ...]`;
 
-export async function stillCopy(brief: string, key?: string): Promise<any[]> {
-  if (!key) {
+export async function stillCopy(brief: string, key?: string, aspen?: AspenConfig): Promise<any[]> {
+  let raw: string;
+  if (aspenConfigured(aspen)) {
+    raw = await aspenChat({ system: STILLS_SYSTEM, messages: [{ role: "user", content: brief }], maxTokens: 1000 }, aspen!);
+  } else if (!key) {
     return [
       { headline: "Stop *guessing* what your market wants.", subhead: "Primary research in hours, not weeks.", cta: "See it free", imageQuery: "empty boardroom", imagePrompt: "A vast empty boardroom at dusk, one chair turned away, dramatic low light, cinematic, moody." },
       { headline: "Ten thousand buyers. *One* morning.", subhead: "Research-grade answers, on demand.", cta: "Start knowing", imageQuery: "crowd city street", imagePrompt: "A dense crowd of diverse people crossing a sunlit city street, shallow depth of field, energetic, cinematic." },
       { headline: "Not opinions. *Proof.*", subhead: "Decide with evidence, not vibes.", cta: "Book a demo", imageQuery: "data on screen", imagePrompt: "Soft-focus glowing data visualizations on a dark screen, abstract, premium, cinematic lighting." },
     ];
+  } else {
+    const res = await fetch(API, {
+      method: "POST",
+      headers: headers(key),
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 1000,
+        system: STILLS_SYSTEM,
+        messages: [{ role: "user", content: brief }],
+      }),
+    });
+    if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
+    const data = await res.json();
+    raw = (data.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
   }
-  const res = await fetch(API, {
-    method: "POST",
-    headers: headers(key),
-    body: JSON.stringify({
-      model: MODEL,
-      max_tokens: 1000,
-      system: STILLS_SYSTEM,
-      messages: [{ role: "user", content: brief }],
-    }),
-  });
-  if (!res.ok) throw new Error(`Anthropic ${res.status}: ${await res.text()}`);
-  const data = await res.json();
-  const raw = (data.content ?? []).filter((b: any) => b.type === "text").map((b: any) => b.text).join("");
   const m = raw.match(/\[[\s\S]*\]/);
   return m ? JSON.parse(m[0]) : [];
 }
