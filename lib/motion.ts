@@ -147,6 +147,14 @@ export function drawSceneFrame(
   const p = frame / Math.max(1, total - 1);
   const gp = (opts.index + p) / opts.count;
 
+  // Start every frame from a clean text state so shadow/tracking from the previous
+  // scene can never bleed into this scene's background or progress bar.
+  ctx.shadowColor = "transparent";
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  if ("letterSpacing" in ctx) (ctx as any).letterSpacing = "0px";
+
   if (opts.overFootage) {
     ctx.clearRect(0, 0, w, h);
     const scrim = ctx.createLinearGradient(0, 0, 0, h);
@@ -159,6 +167,16 @@ export function drawSceneFrame(
     background(ctx, w, h, gp, C);
   }
   progress(ctx, p, w, h, m, C);
+
+  // Type treatment: slightly tighter tracking reads as designed rather than default,
+  // and a soft drop-shadow keeps text legible over busy moving footage without an
+  // ugly solid box. (Background/progress above are drawn before this is set.)
+  if ("letterSpacing" in ctx) (ctx as any).letterSpacing = "-0.015em";
+  if (opts.overFootage) {
+    ctx.shadowColor = "rgba(0,0,0,0.6)";
+    ctx.shadowBlur = Math.round(w * 0.012);
+    ctx.shadowOffsetY = Math.round(w * 0.004);
+  }
 
   const tmpl = classify(scene, opts.isLast);
   const text = (scene.onScreenText || scene.voiceover || "").trim();

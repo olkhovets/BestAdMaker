@@ -95,7 +95,7 @@ const PLAN_SYSTEM = `You convert an approved ad script into a production storybo
 - durationSec between 2 and 8 (read [Xs] markers). This is a hint; the final cut is timed to the voiceover.
 - onScreenText: the SHORT words shown on screen (under ~8 words). Preserve *asterisks* around the punch word.
 - voiceover: the spoken VO line (empty string if "(silence)").
-- footageQuery: 2-4 concrete words naming real b-roll that literally fits the beat, the kind a stock library would have. Good: "empty boardroom", "city traffic night", "hands typing laptop", "team celebrating office". Bad: abstract concepts like "confident decision". Every scene needs one.
+- footageQuery: 2-4 concrete words naming real b-roll that literally fits the beat, the kind a stock library would have. Good: "empty boardroom", "city traffic night", "hands typing laptop", "team celebrating office". Bad: abstract concepts like "confident decision". Every scene needs one. CRITICAL: every scene's query must be VISUALLY DISTINCT from every other scene's — never reuse the same subject or location twice, or the ad looks like one looping clip. Favor cinematic, evocative footage (dramatic light, motion, scale, texture) over flat literal desk shots.
 - visualType: "designed_card" for all scenes (the engine overlays text on footage). 
 - characterRef: null.
 - musicPrompt: a vivid, cinematic brief for ONE instrumental score that mirrors the ad's arc. Be specific about instrumentation, tempo, and a clear build to a peak then resolve — the kind of trailer/brand-film score that gives goosebumps. Name real textures (e.g. "lone piano", "swelling strings", "deep sub hits", "a single rising synth", "no drums until the final third"). No vocals, no cheese, no stock-library feel.
