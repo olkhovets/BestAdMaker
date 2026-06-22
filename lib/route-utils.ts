@@ -8,6 +8,9 @@ export function resolveKeys(req: NextRequest): ApiKeys {
     fal: h.get("x-fal-key") || process.env.FAL_KEY || undefined,
     elevenlabs: h.get("x-elevenlabs-key") || process.env.ELEVENLABS_API_KEY || undefined,
     pexels: h.get("x-pexels-key") || process.env.PEXELS_API_KEY || undefined,
+    aspen: h.get("x-aspen-key") || process.env.ASPEN_API_KEY || undefined,
+    aspenBaseUrl: h.get("x-aspen-base-url") || process.env.ASPEN_BASE_URL || undefined,
+    aspenModel: h.get("x-aspen-model") || process.env.ASPEN_MODEL || undefined,
   };
 }
 

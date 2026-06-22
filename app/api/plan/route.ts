@@ -9,8 +9,9 @@ export async function POST(req: NextRequest) {
   try {
     const { script, aspectRatio } = await req.json();
     const keys = resolveKeys(req);
-    const board = await planStoryboard(script ?? "", aspectRatio ?? "16:9", keys.anthropic);
-    return Response.json({ board, mock: !keys.anthropic });
+    const aspen = { key: keys.aspen, baseUrl: keys.aspenBaseUrl, model: keys.aspenModel };
+    const board = await planStoryboard(script ?? "", aspectRatio ?? "16:9", keys.anthropic, aspen);
+    return Response.json({ board, mock: !keys.anthropic && !keys.aspen });
   } catch (e: any) {
     return jsonError(e?.message ?? "plan failed");
   }

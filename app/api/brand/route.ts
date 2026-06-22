@@ -18,8 +18,9 @@ export async function POST(req: NextRequest) {
     } catch {
       return jsonError("could not reach that site", 502);
     }
-    const brand = await extractBrand(url, html, keys.anthropic);
-    return Response.json({ brand, mock: !keys.anthropic });
+    const aspen = { key: keys.aspen, baseUrl: keys.aspenBaseUrl, model: keys.aspenModel };
+    const brand = await extractBrand(url, html, keys.anthropic, aspen);
+    return Response.json({ brand, mock: !keys.anthropic && !keys.aspen });
   } catch (e: any) {
     return jsonError(e?.message ?? "brand extraction failed");
   }

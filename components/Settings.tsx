@@ -60,6 +60,44 @@ export default function Settings({ open, onClose }: { open: boolean; onClose: ()
             </div>
           ))}
         </div>
+
+        <div className="mt-5 border-t border-line pt-5">
+          <div className="mb-1 flex items-center justify-between">
+            <label className="label">Aspen (local AI) — optional</label>
+            <a href="https://runonaspen.com" target="_blank" rel="noreferrer" className="flex items-center gap-1 text-xs text-teal hover:underline">
+              about <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+          <p className="mb-2 text-[11px] text-muted">
+            A private, locally-run OpenAI-compatible model. When its key is set, Aspen runs the creative
+            director, script, storyboard, brand, and stills copy in place of Claude — nothing leaves your device.
+          </p>
+          <input
+            type="password"
+            className="input font-mono"
+            placeholder="sk-aspen-…"
+            value={keys.aspen ?? ""}
+            onChange={(e) => setKeys({ ...keys, aspen: e.target.value })}
+          />
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input
+              type="text"
+              className="input font-mono"
+              placeholder="https://my.runonaspen.com/v1"
+              value={keys.aspenBaseUrl ?? ""}
+              onChange={(e) => setKeys({ ...keys, aspenBaseUrl: e.target.value })}
+            />
+            <input
+              type="text"
+              className="input font-mono"
+              placeholder="qwen2.5:7b"
+              value={keys.aspenModel ?? ""}
+              onChange={(e) => setKeys({ ...keys, aspenModel: e.target.value })}
+            />
+          </div>
+          <p className="mt-1 text-[11px] text-muted">Base URL · model. Leave blank to use Aspen's defaults.</p>
+        </div>
+
         <div className="mt-6 flex justify-end gap-2">
           <button className="btn-ghost" onClick={onClose}>Cancel</button>
           <button
